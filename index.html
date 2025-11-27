@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Rust Converter</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #f4f4f9;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #2c3e50;
+        }
+
+        /* ZONE DE DROP */
+        #drop-zone {
+            width: 80%;
+            max-width: 800px;
+            padding: 40px;
+            border: 3px dashed #aaa;
+            border-radius: 12px;
+            background: white;
+            text-align: center;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-bottom: 20px;
+        }
+
+        #drop-zone:hover {
+            border-color: #3498db;
+            background: #eaf6ff;
+        }
+
+        #drop-zone p {
+            margin: 0;
+            font-size: 1.1em;
+            color: #666;
+        }
+
+        /* LISTE DES FICHIERS (TABLEAU) */
+        #file-list {
+            width: 90%;
+            max-width: 900px;
+            border-collapse: collapse;
+            background: white;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            overflow: hidden;
+            display: none;
+            /* Caché tant qu'il n'y a pas de fichiers */
+        }
+
+        th,
+        td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        th {
+            background: #34495e;
+            color: white;
+            font-weight: 600;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* ACTIONS */
+        .actions {
+            margin-top: 20px;
+            display: none;
+            gap: 10px;
+        }
+
+        button {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-weight: bold;
+        }
+
+        .btn-convert {
+            background: #27ae60;
+            color: white;
+        }
+
+        .btn-convert:hover {
+            background: #219150;
+        }
+
+        .btn-download-all {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-download-all:hover {
+            background: #2980b9;
+        }
+
+        /* BOUTON INDIVIDUEL */
+        .btn-dl-single {
+            background: #3498db;
+            color: white;
+            padding: 5px 10px;
+            font-size: 12px;
+            text-decoration: none;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        .status-waiting {
+            color: #f39c12;
+        }
+
+        .status-ok {
+            color: #27ae60;
+            font-weight: bold;
+        }
+
+        .status-err {
+            color: #c0392b;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Rust Batch Converter</h1>
+
+    <div id="drop-zone">
+        <p>📂 Click or drag your files here</p>
+        <p style="font-size: 0.8em; color: #999;">(You will be able to choose the output format afterwards)</p>
+    </div>
+    <input type="file" id="fileInput" multiple style="display: none;">
+
+    <table id="file-list">
+        <thead>
+            <tr>
+                <th>File</th>
+                <th>Size</th>
+                <th>Convert to</th>
+                <th>Status / Action</th>
+            </tr>
+        </thead>
+        <tbody id="list-body">
+        </tbody>
+    </table>
+
+    <div class="actions" id="action-buttons">
+        <button class="btn-convert" id="btn-convert-all" onclick="processQueue()">🚀 Convert All</button>
+        <button class="btn-download-all" id="btn-download-all" onclick="downloadAllZip()" style="display:none;">📦
+            Download All (ZIP)</button>
+    </div>
+
+    <script>
+        // --- VARIABLES GLOBALES ---
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('fileInput');
+        const listBody = document.getElementById('list-body');
+        const fileListTable = document.getElementById('file-list');
+        const actionButtons = document.getElementById('action-buttons');
+        const btnDownloadAll = document.getElementById('btn-download-all');
+
+        // Store files in memory here
+        let fileQueue = [];
+        // Structure: { id, file, targetFormat, status, resultBlob }
+
+        // --- DRAG & DROP HANDLERS ---
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.background = '#eaf6ff'; });
+        dropZone.addEventListener('dragleave', () => { dropZone.style.background = 'white'; });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.style.background = 'white';
+            addFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener('change', () => {
+            addFiles(fileInput.files);
+            fileInput.value = "";
+        });
+
+        // --- LOGIQUE D'AJOUT ---
+        function addFiles(files) {
+            if (files.length === 0) return;
+
+            // Show the table if this is the first time
+            fileListTable.style.display = 'table';
+            actionButtons.style.display = 'flex';
+
+            Array.from(files).forEach(file => {
+                const id = Date.now() + Math.random(); // ID unique
+
+                // Objet de configuration pour ce fichier
+                const fileObj = {
+                    id: id,
+                    file: file,
+                    targetFormat: 'png', // defaut
+                    status: 'waiting',
+                    resultBlob: null
+                };
+                fileQueue.push(fileObj);
+
+                // Création de la ligne HTML
+                const row = document.createElement('tr');
+                row.id = `row-${id}`;
+                row.innerHTML = `
+                    <td>${file.name}</td>
+                    <td>${(file.size / 1024).toFixed(1)} KB</td>
+                    <td>
+                        <select onchange="updateFormat(${id}, this.value)">
+                            <option value="png">PNG</option>
+                            <option value="gif">GIF</option>
+                            <option value="jpg">JPG</option>
+                            <option value="bmp">BMP</option>
+                            <option value="ico">ICO</option>
+                        </select>
+                    </td>
+                    <td id="status-${id}" class="status-waiting">Waiting...</td>
+                `;
+                listBody.appendChild(row);
+            });
+        }
+
+        // Mettre à jour le format choisi dans la mémoire
+        window.updateFormat = function (id, newFormat) {
+            const item = fileQueue.find(f => f.id === id);
+            if (item) item.targetFormat = newFormat;
+        }
+
+        // --- CONVERSION LOGIC (This is where it happens) ---
+        async function processQueue() {
+            // On cache le bouton convertir pour éviter le double clic
+            document.getElementById('btn-convert-all').style.display = 'none';
+
+            // On lance toutes les conversions
+            // Promise.all permet d'attendre que TOUT soit fini
+            await Promise.all(fileQueue.map(async (item) => {
+                if (item.status === 'done') return; // Déjà fait
+
+                const statusCell = document.getElementById(`status-${item.id}`);
+                statusCell.innerText = "⏳ Converting...";
+
+                const formData = new FormData();
+                formData.append('fichier', item.file);
+                formData.append('format', item.targetFormat);
+
+                try {
+                    const response = await fetch('/upload', { method: 'POST', body: formData });
+
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        item.resultBlob = blob;
+                        item.status = 'done';
+
+                        // Créer un lien de téléchargement individuel
+                        const url = URL.createObjectURL(blob);
+                        const downloadName = `converted_${item.file.name.split('.')[0]}.${item.targetFormat}`;
+
+                        statusCell.innerHTML = `
+                            <span class="status-ok">✔ OK</span> 
+                            <a href="${url}" download="${downloadName}" class="btn-dl-single">⬇ Download</a>
+                        `;
+                    } else {
+                        item.status = 'error';
+                        statusCell.innerHTML = `<span class="status-err">❌ Error</span>`;
+                    }
+                } catch (e) {
+                    item.status = 'error';
+                    statusCell.innerHTML = `<span class="status-err">❌ Connection error</span>`;
+                }
+            }));
+
+            // Quand tout est fini, on affiche le bouton ZIP
+            btnDownloadAll.style.display = 'inline-block';
+        }
+
+        // --- LOGIQUE DOWNLOAD ALL (ZIP) ---
+        async function downloadAllZip() {
+            const zip = new JSZip();
+            let count = 0;
+
+            // On parcourt notre liste pour ajouter les fichiers réussis au ZIP
+            fileQueue.forEach(item => {
+                if (item.status === 'done' && item.resultBlob) {
+                    // Nom du fichier dans le zip
+                    const name = `${item.file.name.split('.')[0]}.${item.targetFormat}`;
+                    zip.file(name, item.resultBlob);
+                    count++;
+                }
+            });
+
+            if (count === 0) {
+                alert("No files to download!");
+                return;
+            }
+
+            // Générer le zip et déclencher le téléchargement
+            const content = await zip.generateAsync({ type: "blob" });
+            saveAs(content, "my_converted_images.zip");
+        }
+    </script>
+</body>
+
+</html>
